@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
 from yandex_music import Client
+from yandex_music.ynison.client import YnisonClient
 import traceback
 
 app = Flask(__name__)
@@ -21,17 +22,46 @@ def get_now_playing(uid):
         track = None
         is_playing = False
 
-        # Получаем последний прослушанный трек из истории
+        # Получаем состояние Ynison через YnisonClient
         try:
-            history = client.music_history()
-            if history and history.events:
-                # MusicHistory.events - это список событий
-                latest_event = history.events[0]
-                track = latest_event.track
-                is_playing = False  # Из истории мы не можем узнать, играет ли сейчас
-                print(f"DEBUG: Трек из истории: {track.title}")
+            ynison_client = YnisonClient(client.user_info().account.uid, token)
+
+            with ynison_client.session(timeout=5.0) as session:
+                state = ynison_client.latest_state
+
+                if state and state.devices:
+                    # Ищем первое устройство с текущим треком в очереди
+                    for device in state.devices:
+                        if (device.state and
+                            device.state.queue and
+                            device.state.queue.current_index is not None):
+
+                            current_idx = device.state.queue.current_index
+                            tracks = device.state.queue.tracks
+
+                            if current_idx < len(tracks):
+                                track_item = tracks[current_idx]
+
+                                # Получаем трек (может быть уже объект или нужно fetch)
+                                if hasattr(track_item, 'fetch_track'):
+                                    track = track_item.fetch_track()
+                                else:
+                                    track = track_item
+
+                                # Получаем статус воспроизведения
+                                playing_status = getattr(device.state, 'playing_status', None)
+                                if playing_status:
+                                    # Может быть объект с .value или строка
+                                    if hasattr(playing_status, 'value'):
+                                        is_playing = playing_status.value == 'playing'
+                                    else:
+                                        is_playing = str(playing_status).lower() == 'playing'
+
+                                print(f"DEBUG: Трек из Ynison: {track.title if hasattr(track, 'title') else 'unknown'}, playing={is_playing}")
+                                break
+
         except Exception as e:
-            print(f"DEBUG: Ошибка получения истории: {e}")
+            print(f"DEBUG: Ошибка Ynison: {e}")
             traceback.print_exc()
 
         # Если трека нет вообще
