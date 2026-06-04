@@ -18,12 +18,16 @@ def get_now_playing(uid):
 
     try:
         client = Client(token).init()
+        # ОТЛАДКА: посмотрим, что вообще возвращает сервер
         queues = client.queues_list()
+        print(f"DEBUG: Queues found: {queues}") 
         
         if not queues:
+            print("DEBUG: No active queues found.")
             return jsonify({"title": "", "artist": "", "coverUrl": "", "isPlaying": False, "link": ""})
             
         last_queue = client.queue(queues[0].id)
+        print(f"DEBUG: Active queue ID: {queues[0].id}")
         current_index = last_queue.current_index
         
         if current_index is None or current_index >= len(last_queue.tracks):
