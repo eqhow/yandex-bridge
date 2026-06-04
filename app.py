@@ -3,26 +3,33 @@ from yandex_music import Client
 
 app = Flask(__name__)
 
-@app.route('/now-playing', methods=['GET'])
-def get_now_playing():
-    token = request.args.get('token')
+# Маршрут должен быть /api/now-playing/<uid>, как в твоем Swift-коде
+@app.route('/api/now-playing/<uid>', methods=['GET'])
+def get_now_playing(uid):
+    # Получаем токен из заголовка Authorization: Bearer <token>
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith('Bearer '):
+        return jsonify({"error": "No valid token provided"}), 401
     
-    if not token:
-        return jsonify({"error": "No token provided"}), 400
+    token = auth_header.split(" ")[1]
 
     try:
+        # Инициализируем клиент
         client = Client(token).init()
         
+        # Получаем список очередей (сессий)
         queues = client.queues_list()
         
         if not queues:
-            return jsonify({"isPlaying": False})
+            return jsonify({"title": "", "artist": "", "coverUrl": "", "isPlaying": False, "link": ""})
             
+        # Берем самую актуальную очередь
         last_queue = client.queue(queues[0].id)
         
         current_index = last_queue.current_index
-        if current_index is None or not last_queue.tracks:
-            return jsonify({"isPlaying": False})
+        # Проверка на существование трека
+        if current_index is None or current_index >= len(last_queue.tracks):
+            return jsonify({"title": "", "artist": "", "coverUrl": "", "isPlaying": False, "link": ""})
             
         track_item = last_queue.tracks[current_index]
         track = track_item.fetch_track()
@@ -31,17 +38,19 @@ def get_now_playing():
         if track.cover_uri:
             cover_url = "https://" + track.cover_uri.replace('%%', '400x400')
             
+        # Эти ключи теперь полностью соответствуют твоему Swift-декодеру
         response = {
-            "track": track.title,
+            "title": track.title,
             "artist": ", ".join(artist.name for artist in track.artists),
-            "image": cover_url,
+            "coverUrl": cover_url,
             "isPlaying": True,
-            "externalURL": f"https://music.yandex.ru/track/{track.id}"
+            "link": f"https://music.yandex.ru/track/{track.id}"
         }
         
         return jsonify(response)
         
     except Exception as e:
+        print(f"Error: {e}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
