@@ -14,39 +14,40 @@ def get_now_playing(uid):
 
     try:
         client = Client(token).init()
+        
+        # Используем твою находку: ynison_state()
+        # Этот метод возвращает актуальное состояние синхронизации всех устройств
+        ynison_data = client.ynison_state()
+        
         track = None
         is_playing = False
+        
+        # Ynison содержит список активных сессий/очередей
+        # Мы ищем устройство, которое сейчас активно проигрывает музыку
+        if ynison_data and ynison_data.device_state:
+            # Перебираем устройства (обычно активное устройство одно)
+            for device_id, state in ynison_data.device_state.items():
+                # Проверяем, есть ли в состоянии очередь
+                if state.queue and state.queue.current_index is not None:
+                    # Получаем текущий трек из очереди
+                    # state.queue.tracks — это список, берем по индексу
+                    current_idx = state.queue.current_index
+                    if current_idx < len(state.queue.tracks):
+                        track_item = state.queue.tracks[current_idx]
+                        
+                        # fetch_track() обычно нужен, если это ссылка/ID
+                        # Если объект уже содержит данные (как в Ynison), пробуем напрямую
+                        track = track_item.fetch_track()
+                        
+                        # Проверяем статус воспроизведения через PlayingStatus
+                        # (Обычно 1 — это Playing, 2 — Paused, зависит от реализации)
+                        if state.playing_status == 'playing':
+                            is_playing = True
+                        
+                        print(f"DEBUG: Трек найден через Ynison State: {track.title}")
+                        break # Нашли активное устройство, выходим из цикла
 
-        # 1. Попытка через Ynison (Самый приоритетный метод для "Сейчас играет")
-        try:
-            # Получаем список очередей через Ynison
-            queues = client.queues_list()
-            if queues:
-                # Берем последнюю активную очередь
-                last_queue = client.queue(queues[0].id)
-                # Если очередь активна и там есть трек
-                if last_queue.current_index is not None:
-                    track = last_queue.tracks[last_queue.current_index].fetch_track()
-                    is_playing = True
-                    print(f"DEBUG: Трек найден через Ynison: {track.title}")
-        except Exception as e:
-            print(f"DEBUG: Ynison не вернул активный трек: {e}")
-
-        # 2. Если Ynison пуст (музыка стоит на паузе или не синхронизировалась), 
-        # используем твою находку - music_history()
-        if not track:
-            try:
-                # Используем правильный метод из твоей ссылки
-                history = client.music_history()
-                if history:
-                    # history возвращает список событий. Берем самое последнее.
-                    latest_event = history[0]
-                    track = latest_event.track
-                    is_playing = False # Из истории мы знаем только то, что играло, а не играет сейчас
-                    print(f"DEBUG: Трек найден через Music History: {track.title}")
-            except Exception as e:
-                print(f"DEBUG: Ошибка при чтении Music History: {e}")
-
+        # Если через Ynison ничего не нашли (например, музыка стоит на паузе давно)
         if not track:
             return jsonify({"title": "", "artist": "", "coverUrl": "", "isPlaying": False, "link": ""})
 
@@ -67,6 +68,3 @@ def get_now_playing(uid):
         print(f"CRITICAL ERROR: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
