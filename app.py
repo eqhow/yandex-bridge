@@ -17,6 +17,11 @@ def get_now_playing(uid):
     token = auth_header.split(" ")[1]
 
     try:
+        likes = client.users_likes_tracks()
+        print(f"DEBUG: Количество лайкнутых треков: {len(likes)}")
+        except Exception as e:
+        print(f"DEBUG: Не удалось получить лайки: {e}")
+
         client = Client(token).init()
         print(f"DEBUG: Token belongs to UID: {client.me.account.uid}")
         # ОТЛАДКА: посмотрим, что вообще возвращает сервер
