@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
 from yandex_music import Client
+from datetime import datetime, timezone
 import traceback
 
 app = Flask(__name__)
@@ -19,11 +20,10 @@ def get_now_playing(uid):
     try:
         client = Client(token).init()
         
-        # Переменные для финального ответа
         track = None
         is_playing = False
         
-        # МЕТОД 1: Пробуем получить через активную очередь (Ynison)
+        # МЕТОД 1: Пытаемся поймать живую очередь (Ynison)
         try:
             queues = client.queues_list()
             if queues:
@@ -33,28 +33,45 @@ def get_now_playing(uid):
                     track_item = last_queue.tracks[current_index]
                     track = track_item.fetch_track()
                     is_playing = True
-                    print(f"DEBUG: Трек найден через QUEUE (Ynison): {track.title}")
+                    print(f"DEBUG: Трек найден через активную QUEUE: {track.title}")
         except Exception as q_err:
             print(f"DEBUG: Ошибка при чтении очереди: {q_err}")
 
-        # МЕТОД 2: Если очередь пуста, лезем в Историю Прослушиваний (Работает ВСЕГДА)
+        # МЕТОД 2: Твоя идея с 10-минутным таймером истории (ИСПРАВЛЕНО НА users_play_history)
         if not track:
             try:
-                history = client.users_play_histories()
+                history = client.users_play_history()
                 if history:
-                    # Берем самый первый (последний запущенный) трек из истории
                     latest_history_item = history[0]
-                    track = latest_history_item.track
-                    is_playing = True # В истории всегда true для отображения, либо можно симулировать
-                    print(f"DEBUG: Трек найден через HISTORY: {track.title}")
+                    
+                    # Получаем время, когда трек был включен
+                    track_time = latest_history_item.timestamp
+                    
+                    # Приводим к правильному формату datetime, если библиотека вернула строку
+                    if not isinstance(track_time, datetime):
+                        track_time = datetime.fromisoformat(str(track_time).replace('Z', '+00:00'))
+                    
+                    # Считаем разницу с текущим временем сервера
+                    now = datetime.now(timezone.utc)
+                    time_diff_minutes = (now - track_time).total_seconds() / 60
+                    
+                    print(f"DEBUG: Последний трек из истории включен {time_diff_minutes:.1f} мин. назад")
+                    
+                    # Если трек включили менее 10 минут назад — считаем, что музыка ИГРАЕТ
+                    if time_diff_minutes <= 10:
+                        track = latest_history_item.track
+                        is_playing = True
+                        print(f"DEBUG: Трек признан активным через HISTORY: {track.title}")
+                    else:
+                        print(f"DEBUG: Трек из истории слишком старый ({time_diff_minutes:.1f} мин). Плеер считается выключенным.")
             except Exception as h_err:
-                print(f"DEBUG: Ошибка при чтении истории: {h_err}")
+                print(f"DEBUG: Ошибка при расчете времени истории: {h_err}")
 
-        # Если трек так и не нашли (аккаунт вообще пустой)
+        # Если трек не найден или время вышло — отдаем пустой ответ (дизайн не ломается)
         if not track:
             return jsonify({"title": "", "artist": "", "coverUrl": "", "isPlaying": False, "link": ""})
             
-        # Формируем красивый ответ
+        # Собираем данные для Swift
         cover_url = ""
         if track.cover_uri:
             cover_url = "https://" + track.cover_uri.replace('%%', '400x400')
