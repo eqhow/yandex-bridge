@@ -1,8 +1,10 @@
 from flask import Flask, request, jsonify
 from yandex_music import Client
+import traceback
 
 app = Flask(__name__)
 
+# Добавь этот маршрут, чтобы Render не перезагружал сервер
 @app.route('/', methods=['GET'])
 def health_check():
     return "Service is online", 200
@@ -16,24 +18,32 @@ def get_now_playing(uid):
     token = auth_header.split(" ")[1]
 
     try:
-        # Инициализация
         client = Client(token).init()
         
-        # --- БЛОК ВЕРИФИКАЦИИ (чтобы убедиться, что токен рабочий) ---
-        account_info = client.me
-        print(f"DEBUG: [VERIFY] Account UID: {account_info.account.uid}")
+        # --- БЛОК ВЕРИФИКАЦИИ ---
+        uid_from_token = client.me.account.uid
+        print(f"DEBUG: Token belongs to UID: {uid_from_token}")
         
-        # Пробуем получить 1 лайк. Если это работает, значит токен и права доступа 100% верны.
-        likes = client.users_likes_tracks(limit=1)
-        print(f"DEBUG: [VERIFY] API Connection OK. Likes fetched successfully.")
-        # -------------------------------------------------------------
+        # Запрашиваем лайки пользователя для 100% подтверждения аккаунта
+        likes = client.users_likes_tracks()
+        likes_count = len(likes) if likes else 0
+        print(f"DEBUG: [VERIFY] Account has {likes_count} liked tracks.")
+        
+        if likes_count > 0:
+            # Получаем метаданные первого лайкнутого трека для проверки
+            first_liked_track = likes[0].fetch_track()
+            artists = ", ".join(a.name for a in first_liked_track.artists)
+            print(f"DEBUG: [VERIFY] First liked track is: '{first_liked_track.title}' by {artists}")
+        else:
+            print("DEBUG: [VERIFY] Account has NO liked tracks (Is this a brand new account?)")
+        # ------------------------
 
-        # --- ПОЛУЧЕНИЕ ОЧЕРЕДИ ---
+        # ОТЛАДКА: посмотрим, что вообще возвращает сервер (очереди проигрывания)
         queues = client.queues_list()
         print(f"DEBUG: Queues found: {queues}") 
         
         if not queues:
-            print("DEBUG: No active queues found. (Check if music is playing on the SAME account!)")
+            print("DEBUG: No active queues found. (Check if music is playing on the SAME account and device is syncing!)")
             return jsonify({"title": "", "artist": "", "coverUrl": "", "isPlaying": False, "link": ""})
             
         last_queue = client.queue(queues[0].id)
@@ -53,7 +63,6 @@ def get_now_playing(uid):
         response = {
             "title": track.title,
             "artist": ", ".join(artist.name for artist in track.artists),
-            "artist": ", ".join(artist.name for artist in track.artists) if track.artists else "Unknown",
             "coverUrl": cover_url,
             "isPlaying": True,
             "link": f"https://music.yandex.ru/track/{track.id}"
@@ -62,7 +71,8 @@ def get_now_playing(uid):
         return jsonify(response)
         
     except Exception as e:
-        print(f"CRITICAL ERROR: {e}")
+        print(f"Error: {e}")
+        traceback.print_exc()  # Печатает подробный лог ошибки, если что-то упадет
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
