@@ -3,7 +3,6 @@ from yandex_music import Client
 
 app = Flask(__name__)
 
-# Добавь этот маршрут, чтобы Render не перезагружал сервер
 @app.route('/', methods=['GET'])
 def health_check():
     return "Service is online", 200
@@ -17,19 +16,24 @@ def get_now_playing(uid):
     token = auth_header.split(" ")[1]
 
     try:
-        likes = client.users_likes_tracks()
-        print(f"DEBUG: Количество лайкнутых треков: {len(likes)}")
-        except Exception as e:
-        print(f"DEBUG: Не удалось получить лайки: {e}")
-
+        # Инициализация
         client = Client(token).init()
-        print(f"DEBUG: Token belongs to UID: {client.me.account.uid}")
-        # ОТЛАДКА: посмотрим, что вообще возвращает сервер
+        
+        # --- БЛОК ВЕРИФИКАЦИИ (чтобы убедиться, что токен рабочий) ---
+        account_info = client.me
+        print(f"DEBUG: [VERIFY] Account UID: {account_info.account.uid}")
+        
+        # Пробуем получить 1 лайк. Если это работает, значит токен и права доступа 100% верны.
+        likes = client.users_likes_tracks(limit=1)
+        print(f"DEBUG: [VERIFY] API Connection OK. Likes fetched successfully.")
+        # -------------------------------------------------------------
+
+        # --- ПОЛУЧЕНИЕ ОЧЕРЕДИ ---
         queues = client.queues_list()
         print(f"DEBUG: Queues found: {queues}") 
         
         if not queues:
-            print("DEBUG: No active queues found.")
+            print("DEBUG: No active queues found. (Check if music is playing on the SAME account!)")
             return jsonify({"title": "", "artist": "", "coverUrl": "", "isPlaying": False, "link": ""})
             
         last_queue = client.queue(queues[0].id)
@@ -49,6 +53,7 @@ def get_now_playing(uid):
         response = {
             "title": track.title,
             "artist": ", ".join(artist.name for artist in track.artists),
+            "artist": ", ".join(artist.name for artist in track.artists) if track.artists else "Unknown",
             "coverUrl": cover_url,
             "isPlaying": True,
             "link": f"https://music.yandex.ru/track/{track.id}"
@@ -57,7 +62,7 @@ def get_now_playing(uid):
         return jsonify(response)
         
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"CRITICAL ERROR: {e}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
