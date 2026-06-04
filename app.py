@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
 from yandex_music import Client
+from yandex_music.ynison import simple
 import traceback
 
 app = Flask(__name__)
@@ -14,73 +15,77 @@ def get_now_playing(uid):
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
         return jsonify({"error": "No valid token provided"}), 401
-    
+
     token = auth_header.split(" ")[1]
 
     try:
         client = Client(token).init()
-        
-        # 1. Попытка через Ynison State
         track = None
         is_playing = False
-        
+
+        # 1. Пытаемся получить текущий трек через простой интерфейс
         try:
-            ynison_data = client.ynison_state()
-            # Проверяем, есть ли данные о состоянии устройств
-            if ynison_data and hasattr(ynison_data, 'device_state') and ynison_data.device_state:
-                for device_id, state in ynison_data.device_state.items():
-                    # Проверяем наличие очереди
-                    if state.queue and state.queue.current_index is not None:
-                        current_idx = state.queue.current_index
-                        if current_idx < len(state.queue.tracks):
-                            track_item = state.queue.tracks[current_idx]
-                            track = track_item.fetch_track()
-                            
-                            # Проверяем статус (playing или paused)
-                            # У ynison playing_status часто возвращает объект, проверяем его значение
-                            status = getattr(state, 'playing_status', None)
-                            if status and hasattr(status, 'value') and status.value == 'playing':
-                                is_playing = True
-                            
-                            print(f"DEBUG: Успешно через Ynison: {track.title}")
+            state = simple.get_state(token)
+            if state and state.devices:
+                # Ищем активное устройство с текущим треком
+                for device in state.devices:
+                    if device.state and device.state.queue and device.state.queue.current_index is not None:
+                        current_idx = device.state.queue.current_index
+                        if current_idx < len(device.state.queue.tracks):
+                            track_item = device.state.queue.tracks[current_idx]
+                            track = track_item.fetch_track() if hasattr(track_item, 'fetch_track') else track_item
+
+                            # Проверяем статус воспроизведения
+                            status = getattr(device.state, 'playing_status', None)
+                            if status and hasattr(status, 'value'):
+                                is_playing = status.value == 'playing'
+                            elif status:
+                                is_playing = status == 'playing'
+
+                            print(f"DEBUG: Трек из get_state: {track.title if hasattr(track, 'title') else 'unknown'}, playing={is_playing}")
                             break
         except Exception as e:
-            print(f"DEBUG: Ошибка в логике Ynison: {e}")
+            print(f"DEBUG: Ошибка get_state: {e}")
 
-        # 2. Если Ynison пуст, пробуем Fallback: Последний прослушанный трек через history
+        # 2. Если нет текущего трека, берём последний из истории
         if not track:
             try:
-                # Используем твою находку - music_history()
                 history = client.music_history()
                 if history and len(history) > 0:
                     latest_event = history[0]
                     track = latest_event.track
-                    is_playing = False # Из истории мы знаем только факт прослушивания
-                    print(f"DEBUG: Трек подхвачен из History: {track.title}")
+                    is_playing = False
+                    print(f"DEBUG: Трек из истории: {track.title if hasattr(track, 'title') else 'unknown'}")
             except Exception as e:
-                print(f"DEBUG: Ошибка в логике History: {e}")
+                print(f"DEBUG: Ошибка истории: {e}")
 
-        # Финальная проверка
+        # 3. Если трека нет вообще
         if not track:
             return jsonify({"title": "", "artist": "", "coverUrl": "", "isPlaying": False, "link": ""})
 
-        # Формируем ответ
+        # 4. Извлекаем все необходимые данные
         cover_url = ""
-        if track.cover_uri:
-            # Заменяем плейсхолдер %% на нужный размер
+        if hasattr(track, 'cover_uri') and track.cover_uri:
             cover_url = "https://" + track.cover_uri.replace('%%', '400x400')
 
+        artist_name = ""
+        if hasattr(track, 'artists') and track.artists:
+            artist_name = ", ".join(artist.name for artist in track.artists)
+
+        title = track.title if hasattr(track, 'title') else ""
+        track_id = track.id if hasattr(track, 'id') else None
+
         return jsonify({
-            "title": track.title,
-            "artist": ", ".join(artist.name for artist in track.artists) if track.artists else "Unknown Artist",
+            "title": title,
+            "artist": artist_name or "Unknown Artist",
             "coverUrl": cover_url,
             "isPlaying": is_playing,
-            "link": f"https://music.yandex.ru/track/{track.id}" if track.id else ""
+            "link": f"https://music.yandex.ru/track/{track_id}" if track_id else ""
         })
 
     except Exception as e:
         print(f"CRITICAL ERROR: {e}")
-        # traceback.print_exc() # Можно закомментировать в проде, чтобы не засорять логи
+        traceback.print_exc()
         return jsonify({"error": "Internal server error"}), 500
 
 if __name__ == '__main__':
