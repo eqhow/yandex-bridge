@@ -18,6 +18,7 @@ def get_now_playing(uid):
 
     try:
         client = Client(token).init()
+        print(f"DEBUG: Token belongs to UID: {client.me.account.uid}")
         # ОТЛАДКА: посмотрим, что вообще возвращает сервер
         queues = client.queues_list()
         print(f"DEBUG: Queues found: {queues}") 
