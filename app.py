@@ -4,7 +4,6 @@ import traceback
 
 app = Flask(__name__)
 
-# Добавь этот маршрут, чтобы Render не перезагружал сервер
 @app.route('/', methods=['GET'])
 def health_check():
     return "Service is online", 200
@@ -20,59 +19,59 @@ def get_now_playing(uid):
     try:
         client = Client(token).init()
         
-        # --- БЛОК ВЕРИФИКАЦИИ ---
-        uid_from_token = client.me.account.uid
-        print(f"DEBUG: Token belongs to UID: {uid_from_token}")
+        # Переменные для финального ответа
+        track = None
+        is_playing = False
         
-        # Запрашиваем лайки пользователя для 100% подтверждения аккаунта
-        likes = client.users_likes_tracks()
-        likes_count = len(likes) if likes else 0
-        print(f"DEBUG: [VERIFY] Account has {likes_count} liked tracks.")
-        
-        if likes_count > 0:
-            # Получаем метаданные первого лайкнутого трека для проверки
-            first_liked_track = likes[0].fetch_track()
-            artists = ", ".join(a.name for a in first_liked_track.artists)
-            print(f"DEBUG: [VERIFY] First liked track is: '{first_liked_track.title}' by {artists}")
-        else:
-            print("DEBUG: [VERIFY] Account has NO liked tracks (Is this a brand new account?)")
-        # ------------------------
+        # МЕТОД 1: Пробуем получить через активную очередь (Ynison)
+        try:
+            queues = client.queues_list()
+            if queues:
+                last_queue = client.queue(queues[0].id)
+                current_index = last_queue.current_index
+                if current_index is not None and current_index < len(last_queue.tracks):
+                    track_item = last_queue.tracks[current_index]
+                    track = track_item.fetch_track()
+                    is_playing = True
+                    print(f"DEBUG: Трек найден через QUEUE (Ynison): {track.title}")
+        except Exception as q_err:
+            print(f"DEBUG: Ошибка при чтении очереди: {q_err}")
 
-        # ОТЛАДКА: посмотрим, что вообще возвращает сервер (очереди проигрывания)
-        queues = client.queues_list()
-        print(f"DEBUG: Queues found: {queues}") 
-        
-        if not queues:
-            print("DEBUG: No active queues found. (Check if music is playing on the SAME account and device is syncing!)")
+        # МЕТОД 2: Если очередь пуста, лезем в Историю Прослушиваний (Работает ВСЕГДА)
+        if not track:
+            try:
+                history = client.users_play_histories()
+                if history:
+                    # Берем самый первый (последний запущенный) трек из истории
+                    latest_history_item = history[0]
+                    track = latest_history_item.track
+                    is_playing = True # В истории всегда true для отображения, либо можно симулировать
+                    print(f"DEBUG: Трек найден через HISTORY: {track.title}")
+            except Exception as h_err:
+                print(f"DEBUG: Ошибка при чтении истории: {h_err}")
+
+        # Если трек так и не нашли (аккаунт вообще пустой)
+        if not track:
             return jsonify({"title": "", "artist": "", "coverUrl": "", "isPlaying": False, "link": ""})
             
-        last_queue = client.queue(queues[0].id)
-        print(f"DEBUG: Active queue ID: {queues[0].id}")
-        current_index = last_queue.current_index
-        
-        if current_index is None or current_index >= len(last_queue.tracks):
-            return jsonify({"title": "", "artist": "", "coverUrl": "", "isPlaying": False, "link": ""})
-            
-        track_item = last_queue.tracks[current_index]
-        track = track_item.fetch_track()
-        
+        # Формируем красивый ответ
         cover_url = ""
         if track.cover_uri:
             cover_url = "https://" + track.cover_uri.replace('%%', '400x400')
             
         response = {
             "title": track.title,
-            "artist": ", ".join(artist.name for artist in track.artists),
+            "artist": ", ".join(artist.name for artist in track.artists) if track.artists else "Unknown Artist",
             "coverUrl": cover_url,
-            "isPlaying": True,
-            "link": f"https://music.yandex.ru/track/{track.id}"
+            "isPlaying": is_playing,
+            "link": f"https://music.yandex.ru/track/{track.id}" if track.id else ""
         }
         
         return jsonify(response)
         
     except Exception as e:
-        print(f"Error: {e}")
-        traceback.print_exc()  # Печатает подробный лог ошибки, если что-то упадет
+        print(f"CRITICAL ERROR: {e}")
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
