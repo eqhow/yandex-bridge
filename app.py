@@ -1,11 +1,9 @@
 from flask import Flask, request, jsonify
 from yandex_music import Client
-from yandex_music.ynison import simple
 import traceback
 
 app = Flask(__name__)
 
-# ИСПРАВЛЕНИЕ: Добавляем корневой маршрут для health check
 @app.route('/', methods=['GET'])
 def health_check():
     return "Service is online", 200
@@ -23,47 +21,30 @@ def get_now_playing(uid):
         track = None
         is_playing = False
 
-        # 1. Пытаемся получить текущий трек через простой интерфейс
+        # Получаем последний прослушанный трек из истории
         try:
-            state = simple.get_state(token)
-            if state and state.devices:
-                # Ищем активное устройство с текущим треком
-                for device in state.devices:
-                    if device.state and device.state.queue and device.state.queue.current_index is not None:
-                        current_idx = device.state.queue.current_index
-                        if current_idx < len(device.state.queue.tracks):
-                            track_item = device.state.queue.tracks[current_idx]
-                            track = track_item.fetch_track() if hasattr(track_item, 'fetch_track') else track_item
-
-                            # Проверяем статус воспроизведения
-                            status = getattr(device.state, 'playing_status', None)
-                            if status and hasattr(status, 'value'):
-                                is_playing = status.value == 'playing'
-                            elif status:
-                                is_playing = status == 'playing'
-
-                            print(f"DEBUG: Трек из get_state: {track.title if hasattr(track, 'title') else 'unknown'}, playing={is_playing}")
-                            break
+            history = client.music_history()
+            if history and history.events:
+                # MusicHistory.events - это список событий
+                latest_event = history.events[0]
+                track = latest_event.track
+                is_playing = False  # Из истории мы не можем узнать, играет ли сейчас
+                print(f"DEBUG: Трек из истории: {track.title}")
         except Exception as e:
-            print(f"DEBUG: Ошибка get_state: {e}")
+            print(f"DEBUG: Ошибка получения истории: {e}")
+            traceback.print_exc()
 
-        # 2. Если нет текущего трека, берём последний из истории
+        # Если трека нет вообще
         if not track:
-            try:
-                history = client.music_history()
-                if history and len(history) > 0:
-                    latest_event = history[0]
-                    track = latest_event.track
-                    is_playing = False
-                    print(f"DEBUG: Трек из истории: {track.title if hasattr(track, 'title') else 'unknown'}")
-            except Exception as e:
-                print(f"DEBUG: Ошибка истории: {e}")
+            return jsonify({
+                "title": "",
+                "artist": "",
+                "coverUrl": "",
+                "isPlaying": False,
+                "link": ""
+            })
 
-        # 3. Если трека нет вообще
-        if not track:
-            return jsonify({"title": "", "artist": "", "coverUrl": "", "isPlaying": False, "link": ""})
-
-        # 4. Извлекаем все необходимые данные
+        # Извлекаем все необходимые данные
         cover_url = ""
         if hasattr(track, 'cover_uri') and track.cover_uri:
             cover_url = "https://" + track.cover_uri.replace('%%', '400x400')
